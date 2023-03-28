@@ -1,0 +1,130 @@
+Bobocu Alexandra-Florentina, 321CA
+
+
+** Cerinte rezolvate **:
+- procesul de dirijare al pachetelor;
+- protocolul ICMP;
+- Longest Prefix Match eficient;
+- bonusul;
+- protocolul ARP.
+
+
+** Descriere **:
+	Aloc spatiu corespunzator pentru tabela de rutare si parsez fisierul ce
+contine tabela sub format text folosind functia din schelet read_rtable().
+Analog, procedez si pentru tabela ARP, doar ca folosesc functia
+parse_arp_table(). Retin cele 2 tabele, dar si dimensiunile aferente,
+in variabile globale.
+
+	Sortez de la bun inceput tabela de rutare eficient, folosind functia
+qsort(), care imi sorteaza tabela pe baza functiei compare(). In cadrul
+acestei functii, imi declar 2 intrari in tabela de rutare si verific
+egalitatea prefixelor.
+Pentru fiecare intrare in parte, voi trece fiecare prefix al intrarii prin
+masca, folosind operatia de & pe biti. Daca prefixele sunt diferite, ma voi
+asigura ca sunt sortate corespunzator, insa daca avem acelasi prefix pentru
+2 intrari, voi sorta dupa masca.
+
+	In ciclul infinit, in cadrul caruia se trimit propriu-zis pachete, extrag
+in primul rand header-ul Ethernet al fiecarui pachet. Verific ce tip de pachet
+am primit, inspectand tipul header-ului Ethernet:
+
+	I) Daca am primit pachete de tip IP:
+	- Extrag header-ul IP din pachet. In plus, extrag si header-ul ICMP.
+In cazul in care header-ul nu este NULL, voi analiza mesajul ICMP primit.
+Daca tipul acestui mesaj are codul 8, inseamna ca pentru a fi un mesaj valid,
+trebuie sa fi fost adresat ruterului insusi, de tipul "Echo request". Accesez
+campul interfata din pachetul trimis in retea si astfel pot obtine adresa IP a
+interfetei, folosind functia ajutatoare get_interface_ip(). Astfel, daca adresa
+IP a interfetei pachetului este de fapt adresa destinatie, pe care o accesez
+din header-ul IP, sursa coincide cu destinatia, deci pachetul a fost adresat
+ruterului insusi. 
+Se raspunde, conform enuntului, cu un mesaj de tip "Echo reply": se aloca
+spatiu pentru o adresa fizica, iar in urma apelarii functiei ajutatoare
+get_interface_mac(), se completeaza mac-ul alocat. Trimit mesajul ICMP cu
+ajutorul functiei send_icmp(), in cadrul careia sursa devine o destinatie
+(deci trimit un raspuns catre sursa ce a emis o cerere) iar mac-ul tocmai
+creat si completat este sursa.
+	- Tratez cazul cand un pachet este aruncat de ruter din cauza expirarii
+campului ttl. Aloc spatiu pentru o adresa fizica pe care o completez
+corespunzator, dupa care trimit un mesaj de eroare "Time exceed" de tip ICMP,
+cu ajutorul functiei ajutatoare send_icmp_error(). Se raspunde expeditorului
+pachetului eronat, deci sursa devine o destinatie, iar mac-ul creat este sursa.
+	- Ma asigur de corectitudinea checksum-ului, care imi indica daca un pachet
+a fost corupt.
+	- Actualizez ttl-ul si voi recalcula checksum-ul eficient, folosind functia
+bonus_recalculate_checksum(), in cadrul careia aplic algoritmul RFC 1624.
+	- Tratez si cazul cand un pachet este aruncat de ruter din cauza ca nu
+gaseste destinatia unde trebuie sa trimita pachetul. Pentru gasirea eficienta
+a adresei IP destinatie, voi aplica o cautare binara si daca adresa s-a gasit,
+voi salva ruta pe care sa trimit pachetul. Daca nu am gasit o adresa, aloc
+spatiu pentru adresa fizica mac, o completez si voi trimite un mesaj ICMP de
+eroare cu codul 3 catre expeditorul pachetului, sursa fiind chiar adresa IP a
+interfetei pachetului, iar sursa adresei fizice este chiar mac-ul creat.
+
+	Tot in cadrul procesului de forwarding al pachetelor IPv4, o sa se genereze
+cereri ARP daca nu gasesc o intrare in tabela ARP pentru next hop.
+	- Modific adresele MAC sursa si destinatie in header-ul Ethernet.
+Folosind get_interface_mac(), obtin adresa fizica a interfetei rutei celei
+mai bune si o setez pentru adresa sursa. Folosind functia get_arp_entry(),
+gasesc in tabela ARP intrarea unde se afla adresa IP a urmatorului hop.
+	- Ma ocup de pachetele la care nu am gasit in tabela ARP IP-ul destinatie
+si, implicit, MAC-ul destinatie. Creez niste copii ale pachetelor. Acestea vor
+fi puse intr-o coada creata inainte de a intra in bucla while(). Dupa plasarea
+pachetelor in coada, pentru a afla adresa MAC a destinatiei, trimit o cerere
+ARP pe Broadcast pe interfata catre urmatorul hop.
+	- Daca am gasit pentru pachete MAC-ul destinatie (adica adresa IP a
+urmatorului hop se gaseste in tabela ARP), le trimit mai departe, pe
+interfata corecta, dupa ce actualizam si header-ul Ethernet cu cel corect.
+	- In final, se trimite pachetul pe cea mai buna ruta gasita.
+
+	II) Daca am primit pachete de tip ARP:
+	- Extrag header-ul ARP din pachet si verific sa nu fie NULL.
+	- Verific tipul pachetului ARP primit: ARP Request sau ARP Reply.
+
+	II.1) ARP Request:
+		- Ruterul cere adresa MAC a unei adrese IP, deoarece nu o cunoaste.
+		- Aloc spatiu pentru o adresa fizica pe care o completez corespunzator.
+Sursa din cadrul header-ului Ethernet este mac-ul creat si completat, iar
+destinatia o extrag din header-ul arp, accesandu-i campul sursa al adresei
+fizice, astfel ca sursa devine o destinatie, dorind sa trimit raspuns catre
+expeditor.
+		- Se raspunde cu un ARP Reply, folosind functia send_arp() apelata cu
+parametrii potriviti.
+
+	II.2) ARP Reply:
+		- Doar cand trimit la randul meu ARP Requests, pot primi ARP
+replies. IP-ul respectiv raspunde, oferindu-i ruterului adresa MAC asociata.
+		- Cand primesc ARP Replies, adaug intrari in tabela ARP alocata in
+prealabil, cu IP-ul si MAC-ul sursa. Initial, tabela este goala.
+		- Parcurg coada de pachete ce trebuie trimise in retea. Aleg primul
+pachet din coada, dar nu il scot inca si ii extrag headerele Ethernet si IP.
+Folosind cautare binara, voi gasi ruta optima pe care sa trimit pachetul.
+In cazul in care IP-ul pachetului este prezent in tabela ARP, scot pachetul
+din coada, actualizez campurile destinatiei si ale sursei din header-ul
+Ethernet si trimit pachetul mai departe. In caz contrar, astept alte ARP
+replies. Eliberez memoria alocata pachetului.
+
+	In final, eliberez memoria alocata pentru tabela de rutare si tabela ARP.
+
+
+** Precizari **:
+- In skel.c si skel.h, am adaugat functiile ajutatoare:
+ * send_icmp()
+ * send_icmp_error()
+ * send_arp()
+ * build_ethhdr()
+  prezente in arhiva initiala a temei. La primele 3 functii am setat in plus
+interfata pachetului. Apelez aceste functii ajutatoare cu parametrii potriviti.
+
+
+** Probleme intampinate **:
+- Checkerul ruleaza destul de greu;
+- Acomodarea cu tool-ul wireshark;
+- Enuntul temei destul de neclar; am consultat si forumul pentru eventuale
+lamuriri si explicatii in plus.
+
+
+** Referinte **:
+- Laboratorul 4 ocw;
+- https://www.ietf.org/rfc/rfc1624.txt pentru implementarea bonusului.
